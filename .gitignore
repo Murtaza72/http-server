@@ -2,4 +2,5 @@
 *.out
 server
 test.cpp
-.vscode/
+.vscode
+root

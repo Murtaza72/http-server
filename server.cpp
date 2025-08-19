@@ -111,14 +111,89 @@ bool valid_method(std::string method)
 
 bool valid_http_version(std::string http_version) { return http_version == "HTTP/1.1"; }
 
-// stub
-std::string normalize_uri(std::string uri)
+int char_to_int(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+
+    if (c >= 'a' && c <= 'z')
+        return c - 'a' + 10;
+
+    if (c >= 'A' && c <= 'Z')
+        return c - 'A' + 10;
+
+    return 0;
+}
+
+std::string decode_uri(std::string uri)
+{
+    // decoding of special characters such as %20, %2C... etc
+    // ignore query parameters
+    std::string decoded = "";
+
+    for (int i = 0; i < uri.length(); i++)
+    {
+        if (uri[i] == '%' && isxdigit(uri[i + 1]) && isxdigit(uri[i + 1]))
+        {
+            decoded += char_to_int(uri[i + 1]) * 16 + char_to_int(uri[i + 2]);
+            i += 2;
+        }
+        else if (uri[i] == '+')
+        {
+            decoded += ' ';
+        }
+        else
+        {
+            decoded += uri[i];
+        }
+    }
+
+    return decoded;
+}
+
+std::string remove_traversals(std::string uri)
 {
     // if uri like: /.//../.././../././file.html/ is given
-    // handle the decoding of special characters such as %20, %2C... etc
-    // return only /file.html removing the malicious directory traverals, ignoring query parameters and stray /
+    // return only /file.html removing the malicious directory
+    // traverals and ignoring stray /
+
+    int i, pos = 0;
+
+    while ((pos = uri.find("//")) != std::string::npos)
+    {
+        for (i = pos + 2; uri[i] == '/'; i++)
+            continue;
+
+        uri = uri.replace(pos, i - pos - 1, "");
+    }
+
+    if ((pos = uri.find("./")) != std::string::npos)
+    {
+        uri = uri.replace(pos, 2, "");
+    }
+    while ((pos = uri.find("/./")) != std::string::npos)
+    {
+        uri = uri.replace(pos, 2, "");
+    }
+
+    if ((pos = uri.find("../")) != std::string::npos)
+    {
+        uri = uri.replace(pos, 3, "");
+    }
+    while ((pos = uri.find("/../")) != std::string::npos)
+    {
+        uri = uri.replace(pos, 3, "");
+    }
 
     return uri;
+}
+
+std::string normalize_uri(std::string uri)
+{
+    std::string decoded = decode_uri(uri);
+    std::string normalized = remove_traversals(decoded);
+
+    return normalized;
 }
 
 bool valid_uri(std::string uri)
@@ -157,6 +232,8 @@ std::string parse_req(char* raw_buffer)
         response = "HTTP/1.1 400 Bad Request\r\n\r\n";
         return response;
     }
+
+    std::cout << normalize_uri(status_line[1]) << std::endl << std::endl << std::endl;
 
     // valid request
     response = attach_response_headers("<h1>Hello From Murtaza's Server</h1>\n");

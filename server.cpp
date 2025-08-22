@@ -73,19 +73,63 @@ bare-minimum HTTP server.
 */
 
 #include <arpa/inet.h>
-#include <cstring>
 #include <netinet/in.h>
-#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include <cstring>
+#include <iostream>
+#include <map>
+#include <sstream>
+#include <string>
 #include <vector>
 
-#include <iostream>
+#define BUFFER_SIZE 1024 * 4
+#define PORT 8080
+#define ADDR INADDR_ANY
+#define BACKLOG 10
+#define ROOT "root"
 
-constexpr int BUFFER_SIZE = 1000;
-constexpr int PORT = 8080;
-constexpr int ADDR = INADDR_ANY;
-constexpr int BACKLOG = 10;
+enum state
+{
+    status_line,
+    headers,
+    body,
+    error
+};
+
+enum HTTP_method
+{
+    GET = 1,
+    HEAD,
+    POST,
+    PUT,
+    PATCH,
+    UNKNOWN
+};
+
+struct HTTP_status_line
+{
+    HTTP_method method;
+    std::string path;
+    std::string protocol;
+};
+
+struct HTTP_request
+{
+    struct HTTP_status_line status_line;
+    std::map<std::string, std::string> headers;
+    std::string body;
+};
+
+std::string to_lower(std::string text)
+{
+    for (int i = 0; i < text.length(); i++)
+    {
+        text.at(i) = tolower(text.at(i));
+    }
+    return text;
+}
 
 std::vector<std::string> split(const std::string s, const std::string delimiter)
 {
@@ -103,15 +147,15 @@ std::vector<std::string> split(const std::string s, const std::string delimiter)
     return tokens;
 }
 
-bool valid_method(std::string method)
+bool is_valid_method(std::string method)
 {
-    // only GET methods are valid for now
+    // only GET method is valid for now
     return method == "GET";
 }
 
-bool valid_http_version(std::string http_version) { return http_version == "HTTP/1.1"; }
+bool is_valid_http_version(std::string http_version) { return http_version == "HTTP/1.1"; }
 
-int char_to_int(char c)
+int from_hex(char c)
 {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -135,7 +179,7 @@ std::string decode_uri(std::string uri)
     {
         if (uri[i] == '%' && isxdigit(uri[i + 1]) && isxdigit(uri[i + 1]))
         {
-            decoded += char_to_int(uri[i + 1]) * 16 + char_to_int(uri[i + 2]);
+            decoded += from_hex(uri[i + 1]) * 16 + from_hex(uri[i + 2]);
             i += 2;
         }
         else if (uri[i] == '+')
@@ -151,54 +195,58 @@ std::string decode_uri(std::string uri)
     return decoded;
 }
 
-std::string remove_traversals(std::string uri)
+std::string normalize_path(std::string urlPath, std::string root)
 {
-    // if uri like: /.//../.././../././file.html/ is given
-    // return only /file.html removing the malicious directory
-    // traverals and ignoring stray /
+    // removes the malicious directory traverals and ignores ./ and stray /
+    // path: /.//../.././../././file.html/  -> root + /file.html
+    // path: /foo/bar/../file.html          -> root + /foo/file.html
+    // path: /foo/bar/./file.html           -> root + /foo/bar/file.html
+    // path: /foo/bar/////file.html         -> root + /foo/bar/file.html
 
-    int i, pos = 0;
+    std::vector<std::string> parts;
+    std::stringstream ss(urlPath);
+    std::string item;
 
-    while ((pos = uri.find("//")) != std::string::npos)
+    while (std::getline(ss, item, '/'))
     {
-        for (i = pos + 2; uri[i] == '/'; i++)
+        if (item.empty() || item == ".")
+        {
             continue;
-
-        uri = uri.replace(pos, i - pos - 1, "");
+        }
+        else if (item == "..")
+        {
+            if (!parts.empty())
+                parts.pop_back();
+        }
+        else
+        {
+            parts.push_back(item);
+        }
     }
 
-    if ((pos = uri.find("./")) != std::string::npos)
+    std::string normalized = root;
+    for (std::string& p : parts)
     {
-        uri = uri.replace(pos, 2, "");
-    }
-    while ((pos = uri.find("/./")) != std::string::npos)
-    {
-        uri = uri.replace(pos, 2, "");
+        normalized += "/" + p;
     }
 
-    if ((pos = uri.find("../")) != std::string::npos)
-    {
-        uri = uri.replace(pos, 3, "");
-    }
-    while ((pos = uri.find("/../")) != std::string::npos)
-    {
-        uri = uri.replace(pos, 3, "");
-    }
-
-    return uri;
+    return normalized;
 }
 
 std::string normalize_uri(std::string uri)
 {
     std::string decoded = decode_uri(uri);
-    std::string normalized = remove_traversals(decoded);
+    std::string normalized = normalize_path(decoded, ROOT);
 
     return normalized;
 }
 
-bool valid_uri(std::string uri)
+bool is_valid_uri(std::string uri, std::string& valid_uri)
 {
+    // TODO: Implement logic to check if the uri is valid
     std::string normalized_uri = normalize_uri(uri);
+    valid_uri = normalized_uri;
+
     return true;
 }
 
@@ -214,26 +262,74 @@ std::string attach_response_headers(std::string body)
     return headers + body;
 }
 
+std::string response_not_implemented() { return "HTTP/1.1 501 Not Implemented\r\n"; }
+
+std::string response_bad_request() { return "HTTP/1.1 400 Bad Request\r\n"; }
+
 std::string parse_req(char* raw_buffer)
 {
     std::string buffer(raw_buffer);
-    std::vector<std::string> request = split(buffer, "\r\n");
-    std::vector<std::string> status_line = split(request[0], " ");
+
+    HTTP_request request;
+    state current_state = state::error;
+    std::vector<std::string> request_tokens = split(buffer, "\r\n");
+
+    for (int i = 0; i < request_tokens.size(); i++)
+    {
+        if (request_tokens.at(i).find("HTTP/") != std::string::npos)
+        {
+            current_state = state::status_line;
+
+            std::vector<std::string> status_line = split(request_tokens.at(i), " ");
+
+            // if (!is_valid_method(status_line.at(0)))
+            // return response_not_implemented();
+
+            std::string valid_uri;
+            if (!is_valid_uri(status_line.at(1), valid_uri) || !is_valid_http_version(status_line.at(2)))
+                return response_bad_request();
+
+            request.status_line.method = HTTP_method::GET;
+            request.status_line.path = valid_uri;
+            request.status_line.protocol = "HTTP/1.1";
+        }
+
+        else if (request_tokens.at(i) == "")
+        {
+            current_state = state::body;
+            i++;
+
+            while (i < request_tokens.size())
+            {
+                request.body += request_tokens.at(i);
+                i++;
+            }
+        }
+
+        else
+        {
+            current_state = state::headers;
+
+            int pos = 0;
+            while ((pos = request_tokens.at(i).find(": ")) != std::string::npos)
+            {
+                std::string field = request_tokens.at(i).substr(0, pos);
+                std::string value = request_tokens.at(i).substr(pos + 2, request_tokens.at(i).length());
+                request.headers.insert({to_lower(field), value});
+                i++;
+            }
+            i--;
+
+            for (auto& p : request.headers)
+            {
+                std::cout << p.first << ": " << p.second << std::endl;
+            }
+        }
+    }
+
+    std::cout << std::endl << "Path = " << request.status_line.path << std::endl << std::endl;
 
     std::string response;
-
-    if (!valid_method(status_line[0]))
-    {
-        response = "HTTP/1.1 501 Not Implemented\r\n\r\n";
-        return response;
-    }
-    else if (!valid_uri(status_line[1]) || !valid_http_version(status_line[2]))
-    {
-        response = "HTTP/1.1 400 Bad Request\r\n\r\n";
-        return response;
-    }
-
-    std::cout << normalize_uri(status_line[1]) << std::endl << std::endl << std::endl;
 
     // valid request
     response = attach_response_headers("<h1>Hello From Murtaza's Server</h1>\n");
@@ -244,6 +340,7 @@ std::string parse_req(char* raw_buffer)
 int main()
 {
     std::cout << "Server started..." << std::endl;
+
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == -1)
     {

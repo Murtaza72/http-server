@@ -46,10 +46,6 @@ That out of the way, here's a quick checklist to give your project a little stru
     the request is improperly formatted, respond 400. For any other valid requests apart from GET requests, respond with
     501.
 
-
-    -----------------------------------------------------------------------------------------------------------------
-
-
     3. Modify your program to take another command line argument for the "root" directory. Make a directory somewhere,
     and put a dummy HTML file called index.html and another dummy HTML file called whatever you want. Add a dummy image
     file as well. When your server starts up, verify that the folder exists and that your program has permissions to
@@ -61,6 +57,10 @@ That out of the way, here's a quick checklist to give your project a little stru
     4. Add a couple of folders to your root folder, and add dummy html files (and dummy index.html files) to them. Add a
     few levels of nested folders. Modify your program to improve the path-parsing logic to handle folders, and handle
     responses appropriately.
+
+
+    -----------------------------------------------------------------------------------------------------------------
+
 
     5. Modify the permissions on a few dummy folders and files to make their read permissions forbidden to your server
     program. Implement the 403 response appropriately. Scrutinize the URI standard, and modify your path-parsing to
@@ -75,9 +75,11 @@ bare-minimum HTTP server.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -266,6 +268,15 @@ std::string response_not_implemented() { return "HTTP/1.1 501 Not Implemented\r\
 
 std::string response_bad_request() { return "HTTP/1.1 400 Bad Request\r\n"; }
 
+std::string response_not_found() { return "HTTP/1.1 404 Not Found\r\n"; }
+
+int is_directory(std::string path)
+{
+    struct stat path_stat;
+    stat(path.c_str(), &path_stat);
+    return !S_ISREG(path_stat.st_mode);
+}
+
 std::string parse_req(char* raw_buffer)
 {
     std::string buffer(raw_buffer);
@@ -273,6 +284,8 @@ std::string parse_req(char* raw_buffer)
     HTTP_request request;
     state current_state = state::error;
     std::vector<std::string> request_tokens = split(buffer, "\r\n");
+
+    std::string response;
 
     for (int i = 0; i < request_tokens.size(); i++)
     {
@@ -282,12 +295,20 @@ std::string parse_req(char* raw_buffer)
 
             std::vector<std::string> request_line = split(request_tokens.at(i), " ");
 
-            // if (!is_valid_method(request_line.at(0)))
-            // return response_not_implemented();
+            if (!is_valid_method(request_line.at(0)))
+            {
+                current_state = state::error;
+                response = response_not_implemented();
+                break;
+            }
 
             std::string valid_uri;
             if (!is_valid_uri(request_line.at(1), valid_uri) || !is_valid_http_version(request_line.at(2)))
-                return response_bad_request();
+            {
+                current_state = state::error;
+                response = response_bad_request();
+                break;
+            }
 
             request.request_line.method = HTTP_method::GET;
             request.request_line.path = valid_uri;
@@ -329,23 +350,32 @@ std::string parse_req(char* raw_buffer)
 
     std::cout << std::endl << "Path = " << request.request_line.path << std::endl << std::endl;
 
-    std::string response;
-
-    // dir and file logic here, access path using struct request
-    /*
-    char fname[] = "root/murtaza/index.html";
-    if (access(fname, F_OK) == 0)
+    if (current_state != state::error)
     {
-        std::cout << fname << " exists!" << std::endl;
-    }
-    else
-    {
-        std::cout << fname << " does not exist!" << std::endl;
-    }
-    */
+        // check if the path is a directory
+        // if true, add /index.html to the path
+        if (is_directory(request.request_line.path))
+        {
+            request.request_line.path += "/index.html";
+        }
 
-    // valid request
-    response = attach_response_headers("<h1>Hello From Murtaza's Server</h1>\n");
+        std::ifstream file(request.request_line.path);
+        if (file.good())
+        {
+            std::string str;
+            std::string file_contents;
+            while (std::getline(file, str))
+            {
+                file_contents += str + '\n';
+            }
+
+            response = attach_response_headers(file_contents);
+        }
+        else
+        {
+            response = response_not_found();
+        }
+    }
 
     return response;
 }
@@ -357,7 +387,7 @@ int main()
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == -1)
     {
-        std::cerr << "Failed to intialize socket" << std::endl;
+        std::cerr << "ERROR: Failed to intialize socket" << std::endl;
         exit(1);
     }
 
@@ -369,17 +399,17 @@ int main()
     std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(PORT);
-    addr.sin_addr.s_addr = ADDR;
+    addr.sin_addr.s_addr = htons(ADDR);
 
     if (bind(socket_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0)
     {
-        std::cerr << "Failed to bind" << std::endl;
+        std::cerr << "ERROR: Failed to bind" << std::endl;
         exit(1);
     }
 
     if (listen(socket_fd, BACKLOG) == -1)
     {
-        std::cerr << "Failed to listen" << std::endl;
+        std::cerr << "ERROR: Failed to listen" << std::endl;
         exit(1);
     }
 
@@ -391,7 +421,7 @@ int main()
         int client_fd = accept(socket_fd, (struct sockaddr*)&addr, &addr_size);
         if (client_fd == -1)
         {
-            std::cerr << "Failed to accept" << std::endl;
+            std::cerr << "ERROR: Failed to accept" << std::endl;
             exit(1);
         }
 

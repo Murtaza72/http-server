@@ -1,22 +1,18 @@
 #include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <netinet/in.h>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 #define BUFFER_SIZE 1024 * 10
-#define PORT 8080
-#define ADDR INADDR_ANY
 #define BACKLOG 10
-#define ROOT "root"
 
 enum state
 {
@@ -36,16 +32,30 @@ enum HTTP_method
     UNKNOWN
 };
 
-struct request_line
+struct _request_line
 {
     HTTP_method method;
     std::string path;
     std::string protocol;
 };
 
+struct _status_line
+{
+    std::string protocol;
+    int status_code;
+    std::string status_desc;
+};
+
 struct HTTP_request
 {
-    struct request_line request_line;
+    struct _request_line request_line;
+    std::map<std::string, std::string> headers;
+    std::string body;
+};
+
+struct HTTP_response
+{
+    struct _status_line status_line;
     std::map<std::string, std::string> headers;
     std::string body;
 };
@@ -189,25 +199,90 @@ bool is_valid_uri(std::string uri, std::string root, std::string& valid_uri)
     return true;
 }
 
-std::string attach_response_headers(std::string body)
+std::string get_content_type(std::string path)
 {
-    std::string headers = "HTTP/1.1 200 OK\r\n"
-                          "Content-Type: text/html\r\n"
-                          "Content-Length: " +
-                          std::to_string(body.length()) +
-                          "\r\n"
-                          "\r\n";
+    if (path.find(".html") != std::string::npos || path.find(".htm") != std::string::npos)
+    {
+        return "text/html";
+    }
 
-    return headers + body;
+    if (path.find(".txt") != std::string::npos)
+    {
+        return "text/plain";
+    }
+
+    if (path.find(".jpg") != std::string::npos || path.find(".jpeg") != std::string::npos)
+    {
+        return "image/jpeg";
+    }
+
+    if (path.find(".png") != std::string::npos)
+    {
+        return "image/png";
+    }
+
+    // browsers downloads the file by default
+    return "application/octet-stream";
 }
 
-std::string response_not_implemented() { return "HTTP/1.1 501 Not Implemented\r\n"; }
+std::string send_response(HTTP_response& res, std::string path)
+{
+    switch (res.status_line.status_code)
+    {
+    case 200:
+        res.status_line.status_desc = "OK";
+        break;
+    case 400:
+        res.status_line.status_desc = "Bad Request";
+        break;
+    case 403:
+        res.status_line.status_desc = "Forbidden";
+        break;
+    case 404:
+        res.status_line.status_desc = "Not Found";
+        break;
+    case 501:
+        res.status_line.status_desc = "Not Implemented";
+        break;
 
-std::string response_bad_request() { return "HTTP/1.1 400 Bad Request\r\n"; }
+    default:
+        res.status_line.status_code = 500;
+        res.status_line.status_desc = "Internal Server Error";
+        break;
+    }
 
-std::string response_not_found() { return "HTTP/1.1 404 Not Found\r\n"; }
+    std::string response_string = res.status_line.protocol + " " + std::to_string(res.status_line.status_code) + " " +
+                                  res.status_line.status_desc + "\r\n";
 
-std::string response_forbidden() { return "HTTP/1.1 403 Forbidden \r\n"; }
+    std::string content_type = get_content_type(path);
+    res.headers.insert({"content-type", content_type});
+    res.headers.insert({"server", "MTTPServer/0.1"});
+    res.headers.insert({"connection", "close"});
+    res.headers.insert({"content-length", std::to_string(res.body.size())});
+
+    if (res.body == "")
+    {
+        res.body += "<html><body>";
+        res.body += "<h1>" + res.status_line.status_desc + "</h1>\n";
+        res.body += "<hr>\n";
+        res.body += "<p>Served By: <strong>" + res.headers.at("server") + "</strong></p>\n";
+        res.body += "</body></html>";
+
+        res.headers.at("content-type") = "text/html";
+        res.headers.at("content-length") = std::to_string(res.body.length());
+    }
+
+    for (const auto& k : res.headers)
+    {
+        response_string += k.first + ": " + k.second + "\r\n";
+    }
+    response_string += "\r\n";  // end of headers
+
+    // body
+    response_string += res.body;
+
+    return response_string;
+}
 
 int is_directory(std::string path)
 {
@@ -224,7 +299,7 @@ std::string parse_req(char* raw_buffer, std::string root)
     state current_state = state::error;
     std::vector<std::string> request_tokens = split(buffer, "\r\n");
 
-    std::string response;
+    HTTP_response response;
 
     std::cout << "----------\n" << buffer << std::endl;
 
@@ -239,7 +314,7 @@ std::string parse_req(char* raw_buffer, std::string root)
             if (!is_valid_method(request_line.at(0)))
             {
                 current_state = state::error;
-                response = response_not_implemented();
+                response.status_line.status_code = 501;
                 break;
             }
 
@@ -247,25 +322,19 @@ std::string parse_req(char* raw_buffer, std::string root)
             if (!is_valid_uri(request_line.at(1), root, valid_uri) || !is_valid_http_version(request_line.at(2)))
             {
                 current_state = state::error;
-                response = response_bad_request();
+                response.status_line.status_code = 400;
                 break;
             }
 
             request.request_line.method = HTTP_method::GET;
             request.request_line.path = valid_uri;
             request.request_line.protocol = "HTTP/1.1";
+            response.status_line.protocol = request.request_line.protocol;
         }
 
         else if (request_tokens.at(i) == "")
         {
-            current_state = state::body;
-            i++;
-
-            while (i < request_tokens.size())
-            {
-                request.body += request_tokens.at(i);
-                i++;
-            }
+            // ignore body
         }
 
         else
@@ -303,21 +372,22 @@ std::string parse_req(char* raw_buffer, std::string root)
                 file_contents += str + '\n';
             }
 
-            response = attach_response_headers(file_contents);
+            response.status_line.status_code = 200;
+            response.body = file_contents;
         }
         else if (errno == EACCES)
         {
             // errno is global variable set by the syscalls
             // server doesn't have permission to read
-            response = response_forbidden();
+            response.status_line.status_code = 403;
         }
         else if (errno == ENOENT)
         {
-            response = response_not_found();
+            response.status_line.status_code = 404;
         }
     }
 
-    return response;
+    return send_response(response, request.request_line.path);
 }
 
 int main(int argc, char* argv[])

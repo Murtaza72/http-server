@@ -92,7 +92,7 @@ bare-minimum HTTP server.
 
 enum state
 {
-    status_line,
+    request_line,
     headers,
     body,
     error
@@ -108,7 +108,7 @@ enum HTTP_method
     UNKNOWN
 };
 
-struct HTTP_status_line
+struct request_line
 {
     HTTP_method method;
     std::string path;
@@ -117,7 +117,7 @@ struct HTTP_status_line
 
 struct HTTP_request
 {
-    struct HTTP_status_line status_line;
+    struct request_line request_line;
     std::map<std::string, std::string> headers;
     std::string body;
 };
@@ -278,20 +278,20 @@ std::string parse_req(char* raw_buffer)
     {
         if (request_tokens.at(i).find("HTTP/") != std::string::npos)
         {
-            current_state = state::status_line;
+            current_state = state::request_line;
 
-            std::vector<std::string> status_line = split(request_tokens.at(i), " ");
+            std::vector<std::string> request_line = split(request_tokens.at(i), " ");
 
-            // if (!is_valid_method(status_line.at(0)))
+            // if (!is_valid_method(request_line.at(0)))
             // return response_not_implemented();
 
             std::string valid_uri;
-            if (!is_valid_uri(status_line.at(1), valid_uri) || !is_valid_http_version(status_line.at(2)))
+            if (!is_valid_uri(request_line.at(1), valid_uri) || !is_valid_http_version(request_line.at(2)))
                 return response_bad_request();
 
-            request.status_line.method = HTTP_method::GET;
-            request.status_line.path = valid_uri;
-            request.status_line.protocol = "HTTP/1.1";
+            request.request_line.method = HTTP_method::GET;
+            request.request_line.path = valid_uri;
+            request.request_line.protocol = "HTTP/1.1";
         }
 
         else if (request_tokens.at(i) == "")
@@ -327,9 +327,22 @@ std::string parse_req(char* raw_buffer)
         }
     }
 
-    std::cout << std::endl << "Path = " << request.status_line.path << std::endl << std::endl;
+    std::cout << std::endl << "Path = " << request.request_line.path << std::endl << std::endl;
 
     std::string response;
+
+    // dir and file logic here, access path using struct request
+    /*
+    char fname[] = "root/murtaza/index.html";
+    if (access(fname, F_OK) == 0)
+    {
+        std::cout << fname << " exists!" << std::endl;
+    }
+    else
+    {
+        std::cout << fname << " does not exist!" << std::endl;
+    }
+    */
 
     // valid request
     response = attach_response_headers("<h1>Hello From Murtaza's Server</h1>\n");

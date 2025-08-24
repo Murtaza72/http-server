@@ -19,11 +19,11 @@ std::string decode_uri(const std::string& uri)
     // ignore query parameters
     std::string decoded = "";
 
-    for (int i = 0; i < uri.length(); i++)
+    for (size_t i = 0, len = uri.length(); i < len; ++i)
     {
         if (uri[i] == '%' && isxdigit(uri[i + 1]) && isxdigit(uri[i + 1]))
         {
-            decoded += from_hex(uri[i + 1]) * 16 + from_hex(uri[i + 2]);
+            decoded += static_cast<char>(from_hex(uri[i + 1]) * 16 + from_hex(uri[i + 2]));
             i += 2;
         }
         else if (uri[i] == '+')
@@ -79,7 +79,7 @@ std::string normalize_path(const std::string& urlPath, const std::string& root)
 
 std::string remove_params(const std::string& uri)
 {
-    int pos;
+    size_t pos;
     std::string path = uri;
     if ((pos = path.find("?")) != std::string::npos)
     {
@@ -97,9 +97,28 @@ std::string normalize_uri(const std::string& uri, const std::string& root)
     return normalized;
 }
 
+bool has_invalid_characters(std::string uri)
+{
+    for (char c : uri)
+    {
+        if (c <= 0x1F || c >= 0x7F || c == ' ')
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool is_valid_uri(const std::string& uri, const std::string& root, std::string& valid_uri)
 {
-    // TODO: Implement logic to check if the uri is valid
+    // uri should start with /
+    if (uri[0] != '/')
+        return false;
+
+    // spaces should be encoded
+    if (has_invalid_characters(uri))
+        return false;
+
     std::string normalized_uri = normalize_uri(uri, root);
     valid_uri = normalized_uri;
 
@@ -243,7 +262,7 @@ std::string parse_req(char* raw_buffer, const std::string& root)
 
     std::cout << "----------\n" << buffer << std::endl;
 
-    for (int i = 0; i < request_tokens.size(); i++)
+    for (size_t i = 0, size = request_tokens.size(); i < size; ++i)
     {
         if (request_tokens.at(i).find("HTTP/") != std::string::npos)
         {
@@ -281,7 +300,7 @@ std::string parse_req(char* raw_buffer, const std::string& root)
         {
             current_state = state::headers;
 
-            int pos = 0;
+            size_t pos = 0;
             while ((pos = request_tokens.at(i).find(": ")) != std::string::npos)
             {
                 std::string field = request_tokens.at(i).substr(0, pos);
@@ -374,7 +393,7 @@ int main(int argc, char* argv[])
         }
 
         std::memset(&buffer, 0, sizeof(buffer));
-        int len = recv(client_fd, buffer, BUFFER_SIZE, 0);
+        recv(client_fd, buffer, BUFFER_SIZE, 0);
 
         std::string response = parse_req(buffer, root);
 

@@ -8,9 +8,9 @@
 
 std::string to_lower(std::string text)
 {
-    for (int i = 0; i < text.length(); i++)
+    for (size_t i = 0, len = text.length(); i < len; ++i)
     {
-        text.at(i) = tolower(text.at(i));
+        text.at(i) = static_cast<char>(tolower(text.at(i)));
     }
     return text;
 }

@@ -1,4 +1,4 @@
-CFLAGS=-g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion
+CFLAGS=-g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -std=c++11
 CC=g++
 OPTIMIZE=-O3
 

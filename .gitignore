@@ -1,6 +1,5 @@
 *.exe
 *.out
 server
-test.cpp
 .vscode
 root

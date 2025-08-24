@@ -2,110 +2,16 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <map>
 #include <netinet/in.h>
 #include <sstream>
-#include <string>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <unistd.h>
-#include <vector>
+
+#include "server.h"
+#include "utility.h"
 
 #define BUFFER_SIZE 1024 * 10
 #define BACKLOG 10
-
-enum state
-{
-    request_line,
-    headers,
-    body,
-    error
-};
-
-enum HTTP_method
-{
-    GET = 1,
-    HEAD,
-    POST,
-    PUT,
-    PATCH,
-    UNKNOWN
-};
-
-struct _request_line
-{
-    HTTP_method method;
-    std::string path;
-    std::string protocol;
-};
-
-struct _status_line
-{
-    std::string protocol;
-    int status_code;
-    std::string status_desc;
-};
-
-struct HTTP_request
-{
-    struct _request_line request_line;
-    std::map<std::string, std::string> headers;
-    std::string body;
-};
-
-struct HTTP_response
-{
-    struct _status_line status_line;
-    std::map<std::string, std::string> headers;
-    std::string body;
-};
-
-std::string to_lower(std::string text)
-{
-    for (int i = 0; i < text.length(); i++)
-    {
-        text.at(i) = tolower(text.at(i));
-    }
-    return text;
-}
-
-std::vector<std::string> split(const std::string s, const std::string delimiter)
-{
-    std::vector<std::string> tokens;
-    size_t pos_end, pos_start = 0;
-    std::string token;
-    while ((pos_end = s.find(delimiter, pos_start)) != std::string::npos)
-    {
-        token = s.substr(pos_start, pos_end - pos_start);
-        tokens.push_back(token);
-        pos_start = pos_end + delimiter.length();
-    }
-    tokens.push_back(s.substr(pos_start));
-
-    return tokens;
-}
-
-bool is_valid_method(std::string method)
-{
-    // only GET method is valid for now
-    return method == "GET";
-}
-
-bool is_valid_http_version(std::string http_version) { return http_version == "HTTP/1.1"; }
-
-int from_hex(char c)
-{
-    if (c >= '0' && c <= '9')
-        return c - '0';
-
-    if (c >= 'a' && c <= 'z')
-        return c - 'a' + 10;
-
-    if (c >= 'A' && c <= 'Z')
-        return c - 'A' + 10;
-
-    return 0;
-}
 
 std::string decode_uri(std::string uri)
 {
@@ -225,7 +131,7 @@ std::string get_content_type(std::string path)
     return "application/octet-stream";
 }
 
-std::string send_response(HTTP_response& res, std::string path)
+void get_status_desc(HTTP_response& res)
 {
     switch (res.status_line.status_code)
     {
@@ -250,6 +156,11 @@ std::string send_response(HTTP_response& res, std::string path)
         res.status_line.status_desc = "Internal Server Error";
         break;
     }
+}
+
+std::string send_response(HTTP_response& res, std::string path)
+{
+    get_status_desc(res);
 
     std::string response_string = res.status_line.protocol + " " + std::to_string(res.status_line.status_code) + " " +
                                   res.status_line.status_desc + "\r\n";
@@ -262,11 +173,11 @@ std::string send_response(HTTP_response& res, std::string path)
 
     if (res.body == "")
     {
-        res.body += "<html><body>";
+        res.body += "<html>\n<body>\n";
         res.body += "<h1>" + res.status_line.status_desc + "</h1>\n";
         res.body += "<hr>\n";
         res.body += "<p>Served By: <strong>" + res.headers.at("server") + "</strong></p>\n";
-        res.body += "</body></html>";
+        res.body += "</body>\n</html>\n";
 
         res.headers.at("content-type") = "text/html";
         res.headers.at("content-length") = std::to_string(res.body.length());
@@ -284,11 +195,38 @@ std::string send_response(HTTP_response& res, std::string path)
     return response_string;
 }
 
-int is_directory(std::string path)
+void get_file_contents(HTTP_request& req, HTTP_response& res)
 {
-    struct stat path_stat;
-    stat(path.c_str(), &path_stat);
-    return S_ISDIR(path_stat.st_mode);
+    if (access(req.request_line.path.c_str(), R_OK) == 0)
+    {
+        // check if the path is a directory
+        // if true, add /index.html to the path
+        if (is_directory(req.request_line.path))
+        {
+            req.request_line.path += "/index.html";
+        }
+
+        std::ifstream file(req.request_line.path);
+        std::string str;
+        std::string file_contents;
+        while (std::getline(file, str))
+        {
+            file_contents += str + '\n';
+        }
+
+        res.status_line.status_code = 200;
+        res.body = file_contents;
+    }
+    else if (errno == EACCES)
+    {
+        // errno is global variable set by the syscalls
+        // server doesn't have permission to read
+        res.status_line.status_code = 403;
+    }
+    else if (errno == ENOENT)
+    {
+        res.status_line.status_code = 404;
+    }
 }
 
 std::string parse_req(char* raw_buffer, std::string root)
@@ -311,7 +249,7 @@ std::string parse_req(char* raw_buffer, std::string root)
 
             std::vector<std::string> request_line = split(request_tokens.at(i), " ");
 
-            if (!is_valid_method(request_line.at(0)))
+            if (request_line.at(0) != "GET")
             {
                 current_state = state::error;
                 response.status_line.status_code = 501;
@@ -319,7 +257,7 @@ std::string parse_req(char* raw_buffer, std::string root)
             }
 
             std::string valid_uri;
-            if (!is_valid_uri(request_line.at(1), root, valid_uri) || !is_valid_http_version(request_line.at(2)))
+            if (!is_valid_uri(request_line.at(1), root, valid_uri) || request_line.at(2) != "HTTP/1.1")
             {
                 current_state = state::error;
                 response.status_line.status_code = 400;
@@ -328,8 +266,6 @@ std::string parse_req(char* raw_buffer, std::string root)
 
             request.request_line.method = HTTP_method::GET;
             request.request_line.path = valid_uri;
-            request.request_line.protocol = "HTTP/1.1";
-            response.status_line.protocol = request.request_line.protocol;
         }
 
         else if (request_tokens.at(i) == "")
@@ -355,36 +291,7 @@ std::string parse_req(char* raw_buffer, std::string root)
 
     if (current_state != state::error)
     {
-        if (access(request.request_line.path.c_str(), R_OK) == 0)
-        {
-            // check if the path is a directory
-            // if true, add /index.html to the path
-            if (is_directory(request.request_line.path))
-            {
-                request.request_line.path += "/index.html";
-            }
-
-            std::ifstream file(request.request_line.path);
-            std::string str;
-            std::string file_contents;
-            while (std::getline(file, str))
-            {
-                file_contents += str + '\n';
-            }
-
-            response.status_line.status_code = 200;
-            response.body = file_contents;
-        }
-        else if (errno == EACCES)
-        {
-            // errno is global variable set by the syscalls
-            // server doesn't have permission to read
-            response.status_line.status_code = 403;
-        }
-        else if (errno == ENOENT)
-        {
-            response.status_line.status_code = 404;
-        }
+        get_file_contents(request, response);
     }
 
     return send_response(response, request.request_line.path);

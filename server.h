@@ -51,22 +51,22 @@ struct HTTP_response
     std::string body;
 };
 
-std::string decode_uri(std::string uri);
+std::string decode_uri(const std::string& uri);
 
-std::string normalize_path(std::string urlPath, std::string root);
+std::string normalize_path(const std::string& urlPath, const std::string& root);
 
-std::string remove_params(std::string uri);
+std::string remove_params(const std::string& uri);
 
-std::string normalize_uri(std::string uri, std::string root);
+std::string normalize_uri(const std::string& uri, const std::string& root);
 
-bool is_valid_uri(std::string uri, std::string root, std::string& valid_uri);
+bool is_valid_uri(const std::string& uri, const std::string& root, std::string& valid_uri);
 
 void get_status_desc(HTTP_response& rec);
 
-std::string get_content_type(std::string path);
+std::string get_content_type(const std::string& path);
 
 void get_file_contents(HTTP_request& req, HTTP_response& res);
 
-std::string parse_req(char* raw_buffer, std::string root);
+std::string parse_req(char* raw_buffer, const std::string& root);
 
 #endif

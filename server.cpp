@@ -13,7 +13,7 @@
 #define BUFFER_SIZE 1024 * 10
 #define BACKLOG 10
 
-std::string decode_uri(std::string uri)
+std::string decode_uri(const std::string& uri)
 {
     // decoding of special characters such as %20, %2C... etc
     // ignore query parameters
@@ -39,7 +39,7 @@ std::string decode_uri(std::string uri)
     return decoded;
 }
 
-std::string normalize_path(std::string urlPath, std::string root)
+std::string normalize_path(const std::string& urlPath, const std::string& root)
 {
     // removes the malicious directory traverals and ignores ./ and stray /
     // path: /.//../.././../././file.html/  -> root + /file.html
@@ -77,18 +77,19 @@ std::string normalize_path(std::string urlPath, std::string root)
     return normalized;
 }
 
-std::string remove_params(std::string uri)
+std::string remove_params(const std::string& uri)
 {
     int pos;
-    if ((pos = uri.find("?")) != std::string::npos)
+    std::string path = uri;
+    if ((pos = path.find("?")) != std::string::npos)
     {
-        uri = uri.substr(0, pos);
+        path = path.substr(0, pos);
     }
 
-    return uri;
+    return path;
 }
 
-std::string normalize_uri(std::string uri, std::string root)
+std::string normalize_uri(const std::string& uri, const std::string& root)
 {
     std::string decoded = decode_uri(uri);
     std::string normalized = normalize_path(remove_params(decoded), root);
@@ -96,7 +97,7 @@ std::string normalize_uri(std::string uri, std::string root)
     return normalized;
 }
 
-bool is_valid_uri(std::string uri, std::string root, std::string& valid_uri)
+bool is_valid_uri(const std::string& uri, const std::string& root, std::string& valid_uri)
 {
     // TODO: Implement logic to check if the uri is valid
     std::string normalized_uri = normalize_uri(uri, root);
@@ -105,7 +106,7 @@ bool is_valid_uri(std::string uri, std::string root, std::string& valid_uri)
     return true;
 }
 
-std::string get_content_type(std::string path)
+std::string get_content_type(const std::string& path)
 {
     if (path.find(".html") != std::string::npos || path.find(".htm") != std::string::npos)
     {
@@ -158,7 +159,7 @@ void get_status_desc(HTTP_response& res)
     }
 }
 
-std::string send_response(HTTP_response& res, std::string path)
+std::string send_response(HTTP_response& res, const std::string& path)
 {
     get_status_desc(res);
 
@@ -173,8 +174,9 @@ std::string send_response(HTTP_response& res, std::string path)
 
     if (res.body == "")
     {
-        res.body += "<html>\n<body>\n";
-        res.body += "<h1>" + res.status_line.status_desc + "</h1>\n";
+        res.body += "<html>\n<body style='background-color:#FF0000;'>\n";
+        res.body +=
+            "<h1>" + std::to_string(res.status_line.status_code) + " " + res.status_line.status_desc + "</h1>\n";
         res.body += "<hr>\n";
         res.body += "<p>Served By: <strong>" + res.headers.at("server") + "</strong></p>\n";
         res.body += "</body>\n</html>\n";
@@ -229,7 +231,7 @@ void get_file_contents(HTTP_request& req, HTTP_response& res)
     }
 }
 
-std::string parse_req(char* raw_buffer, std::string root)
+std::string parse_req(char* raw_buffer, const std::string& root)
 {
     std::string buffer(raw_buffer);
 
@@ -273,7 +275,9 @@ std::string parse_req(char* raw_buffer, std::string root)
             // ignore body
         }
 
-        else
+        // if any other protocol other than HTTP is called
+        // server shouldn't go in an infinite loop
+        else if (request_tokens.at(i).find(": ") != std::string::npos)
         {
             current_state = state::headers;
 
@@ -287,14 +291,21 @@ std::string parse_req(char* raw_buffer, std::string root)
             }
             i--;
         }
+        else
+        {
+            current_state = state::error;
+            response.status_line.status_code = 400;
+            break;
+        }
     }
 
     if (current_state != state::error)
     {
         get_file_contents(request, response);
+        return send_response(response, request.request_line.path);
     }
 
-    return send_response(response, request.request_line.path);
+    return send_response(response, "/");
 }
 
 int main(int argc, char* argv[])
@@ -334,7 +345,7 @@ int main(int argc, char* argv[])
     addr.sin_port = htons(port);
     if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0)
     {
-        std::cerr << "inet_pton" << std::endl;
+        std::cerr << "ERROR: Invalid IP address" << std::endl;
         exit(1);
     }
 

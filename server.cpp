@@ -90,7 +90,7 @@ std::string normalize_path(const std::string& urlPath, const std::string& root)
     std::string normalized = root;
     for (std::string& p : parts)
     {
-        normalized += "/" + p;
+        normalized += '/' + p;
     }
 
     return normalized;
@@ -102,7 +102,7 @@ std::string remove_params(const std::string& uri)
     std::string path = uri;
     if ((pos = path.find("?")) != std::string::npos)
     {
-        path = path.substr(0, pos);
+        path.erase(pos, path.length() - pos);
     }
 
     return path;
@@ -201,8 +201,11 @@ std::string send_response(HTTP_response& res, const std::string& path)
 {
     get_status_desc(res);
 
-    std::string response_string = res.status_line.protocol + " " + std::to_string(res.status_line.status_code) + " " +
-                                  res.status_line.status_desc + "\r\n";
+    std::string response_string;
+    response_string.reserve(BUFFER_SIZE);
+
+    response_string = res.status_line.protocol + " " + std::to_string(res.status_line.status_code) + " " +
+                      res.status_line.status_desc + "\r\n";
 
     std::string content_type = get_content_type(path);
     res.headers.insert({"content-type", content_type});
@@ -269,10 +272,8 @@ void get_file_contents(HTTP_request& req, HTTP_response& res)
     }
 }
 
-std::string parse_req(char* raw_buffer, const std::string& root)
+std::string parse_req(std::string buffer, const std::string& root)
 {
-    std::string buffer(raw_buffer);
-
     HTTP_request request;
     state current_state = state::error;
     std::vector<std::string> request_tokens = split(buffer, "\r\n");

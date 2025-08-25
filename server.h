@@ -85,6 +85,6 @@ std::string get_content_type(const std::string& path);
 
 void get_file_contents(HTTP_request& req, HTTP_response& res);
 
-std::string parse_req(char* raw_buffer, const std::string& root);
+std::string parse_req(std::string buffer, const std::string& root);
 
 #endif

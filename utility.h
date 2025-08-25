@@ -36,6 +36,7 @@ std::string to_lower(std::string text)
 std::vector<std::string> split(const std::string s, const std::string delimiter)
 {
     std::vector<std::string> tokens;
+    tokens.reserve(15);
     size_t pos_end, pos_start = 0;
     std::string token;
     while ((pos_end = s.find(delimiter, pos_start)) != std::string::npos)

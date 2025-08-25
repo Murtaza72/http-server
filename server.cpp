@@ -66,6 +66,7 @@ std::string normalize_path(const std::string& urlPath, const std::string& root)
     // path: /foo/bar/////file.html         -> root + /foo/bar/file.html
 
     std::vector<std::string> parts;
+    parts.reserve(15);
     std::stringstream ss(urlPath);
     std::string item;
 
@@ -401,6 +402,8 @@ int main(int argc, char* argv[])
     socklen_t addr_size = sizeof(addr);
     char buffer[BUFFER_SIZE] = {0};
 
+    size_t len = sizeof(buffer);
+
     while (1)
     {
         int client_fd = accept(socket_fd, (struct sockaddr*)&addr, &addr_size);
@@ -410,8 +413,9 @@ int main(int argc, char* argv[])
             exit(1);
         }
 
-        std::memset(&buffer, 0, sizeof(buffer));
-        recv(client_fd, buffer, BUFFER_SIZE, 0);
+        std::memset(&buffer, 0, len);
+        len = recv(client_fd, buffer, BUFFER_SIZE, 0);
+        len++;
 
         std::string response = parse_req(buffer, root);
 

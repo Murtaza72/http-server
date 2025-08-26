@@ -6,6 +6,8 @@ Learnt some misc things like, POSIX functions <b>don't</b> actually return the e
 
 Yeah, reading the RFC gets you sorted with what you want to do, really helpful.
 
+Also had some fun with fork().
+
 ## References
 
 1. [RFC for HTTP/1.0](https://datatracker.ietf.org/doc/html/rfc1945)

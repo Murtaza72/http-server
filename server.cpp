@@ -23,6 +23,7 @@
 #include <netinet/in.h>
 #include <sstream>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "server.h"
@@ -164,6 +165,11 @@ std::string get_content_type(const std::string& path)
     if (path.find(".png") != std::string::npos)
     {
         return "image/png";
+    }
+
+    if (path.find(".pdf") != std::string::npos)
+    {
+        return "application/pdf";
     }
 
     // browsers downloads the file by default
@@ -347,6 +353,19 @@ std::string parse_req(std::string buffer, const std::string& root)
     return send_response(response, "/");
 }
 
+void handle_client(int fd, std::string root)
+{
+    char buffer[BUFFER_SIZE] = {0};
+    recv(fd, buffer, BUFFER_SIZE, 0);
+
+    std::string response = parse_req(buffer, root);
+
+    send(fd, response.c_str(), sizeof(char) * response.length(), 0);
+
+    close(fd);
+    exit(0);
+}
+
 int main(int argc, char* argv[])
 {
     if (argc < 4)
@@ -400,10 +419,10 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-    socklen_t addr_size = sizeof(addr);
-    char buffer[BUFFER_SIZE] = {0};
+    // prevents zombies
+    signal(SIGCHLD, SIG_IGN);
 
-    size_t len = sizeof(buffer);
+    socklen_t addr_size = sizeof(addr);
 
     while (1)
     {
@@ -414,18 +433,25 @@ int main(int argc, char* argv[])
             exit(1);
         }
 
-        std::memset(&buffer, 0, len);
-        len = recv(client_fd, buffer, BUFFER_SIZE, 0);
-        len++;
+        pid_t pid = fork();
 
-        std::string response = parse_req(buffer, root);
-
-        send(client_fd, response.c_str(), sizeof(char) * response.length(), 0);
-
-        close(client_fd);
+        if (pid == 0)
+        {
+            // child handles the req
+            close(socket_fd);
+            handle_client(client_fd, root);
+        }
+        else if (pid < 0)
+        {
+            std::cerr << "ERROR: fork returned -1" << std::endl;
+            close(client_fd);
+            exit(1);
+        }
+        else
+        {
+            close(client_fd);
+        }
     }
-
-    close(socket_fd);
 
     return 0;
 }
